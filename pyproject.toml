@@ -8,4 +8,5 @@ dependencies = [
     "fastapi>=0.128.0",
     "fastmcp>=2.14.4",
     "pymysql>=1.1.2",
+    "python-dotenv>=1.2.1",
 ]

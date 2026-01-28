@@ -1,5 +1,4 @@
 import json
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -18,7 +17,8 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    client = MCPClient(os.getenv('MCP_SERVER_URL'))
+    logger.info(f"Starting MCP Client API with MCP server at {config.MCP_SERVER_URL}")
+    client = MCPClient(config.MCP_SERVER_URL)
     try:
         connected = await client.connect_to_server()
         if not connected:

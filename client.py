@@ -64,11 +64,11 @@ class MCPClient:
     async def process_query(self, natural_language_query: str, schema_context: str):
         try:
             tool_names = [tool.get("name") for tool in self.tools if "name" in tool]
-            if not "convert_to_sql" in tool_names:
+            if not "tool_convert_to_sql" in tool_names:
                 logger.info("Required tool not found for processing query.\n Exiting the process.")
                 raise
 
-            response = await self.session.call_tool("convert_to_sql", arguments={"query": natural_language_query, "schema_context": schema_context})
+            response = await self.session.call_tool("tool_convert_to_sql", arguments={"query": natural_language_query, "schema_context": schema_context})
 
             logger.info(f"Processed query response: {response}")
 

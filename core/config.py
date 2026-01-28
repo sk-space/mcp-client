@@ -1,7 +1,12 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from dotenv import load_dotenv
+
 from logger import get_logger
+
+load_dotenv()
 
 
 logger = get_logger(__name__)
@@ -16,7 +21,7 @@ class Config:
     DB_NAME: str = os.getenv("DB_NAME", "test_db")
 
     # MCP Server Configuration
-    MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
+    MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL")
 
     # API Configuration
     API_HOST: str = os.getenv("API_HOST", "localhost")
