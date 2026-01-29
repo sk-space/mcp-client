@@ -1,4 +1,7 @@
-from typing import List, Dict, Any
+import ast
+import re
+from typing import Dict, Any
+from typing import List
 
 from core.database import db_manager
 from logger import get_logger
@@ -352,6 +355,63 @@ class SchemaManager:
                 schema_string += f"  - {col['name']} ({col['type']}{pk_flag}{null_flag})\n"
 
         return schema_string
+
+
+    def parse_schema_string(self, schema_string: str) -> Dict[str, Any]:
+        schema: Dict[str, Any] = {"tables": {}}
+
+        current_table = None
+
+        lines = schema_string.splitlines()
+
+        for line in lines:
+            line = line.strip()
+
+            # Table name
+            if line.startswith("Table:"):
+                table_name = line.replace("Table:", "").strip()
+                current_table = {
+                    "create_statement": "",
+                    "columns": {},
+                    "sample_data": []
+                }
+                schema["tables"][table_name] = current_table
+
+            # CREATE TABLE
+            elif line.startswith("Create Statement:") and current_table is not None:
+                current_table["create_statement"] = line.replace(
+                    "Create Statement:", ""
+                ).strip()
+
+            # Column definition
+            elif line.startswith("-") and current_table is not None:
+                # Example:
+                # - department_id (bigint PRIMARY KEY NOT NULL)
+                match = re.match(r"-\s+(\w+)\s+\((.+)\)", line)
+                if not match:
+                    continue
+
+                col_name, col_meta = match.groups()
+
+                col_meta = col_meta.upper()
+
+                current_table["columns"][col_name] = {
+                    "type": col_meta.split()[0].lower(),
+                    "primary_key": "PRIMARY KEY" in col_meta,
+                    "nullable": "NOT NULL" not in col_meta
+                }
+
+            # Sample data
+            elif line.startswith("{") and current_table is not None:
+                try:
+                    # safe literal eval
+                    current_table["sample_data"].append(ast.literal_eval(line))
+                except Exception:
+                    pass
+
+        logger.info(f"Schema: {schema}")
+
+        return schema
 
 
 schema_manager = SchemaManager()

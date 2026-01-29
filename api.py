@@ -94,7 +94,8 @@ async def process_query(request: QueryRequest):
     """Process a query and return the response"""
     try:
         schema_string = schema_manager.get_schema_string(config.DB_NAME)
-        response = await app.state.client.process_query(request.query, schema_string)
+        schema = schema_manager.parse_schema_string(schema_string)
+        response = await app.state.client.process_query(request.query, schema)
         return json.loads(response)
     except Exception as e:
         logger.info(f"Failed to generate sql: {str(e)}")

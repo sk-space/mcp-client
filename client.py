@@ -61,7 +61,7 @@ class MCPClient:
 
 
     # process query
-    async def process_query(self, natural_language_query: str, schema_context: str):
+    async def process_query(self, natural_language_query: str, schema_context: dict):
         try:
             tool_names = [tool.get("name") for tool in self.tools if "name" in tool]
             if not "tool_convert_to_sql" in tool_names:
