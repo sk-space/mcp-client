@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from client import MCPClient
 from core.config import config
+from core.database import db_manager
 from core.schema import schema_manager
 from logger import get_logger, setup_file_logging
 
@@ -83,7 +84,8 @@ async def get_schema():
     """Get the database schema"""
     try:
         schema = await schema_manager.get_schema_info(config.DB_NAME)
-        return {"schema": schema}
+        logger.info(f"Retrieved schema: {schema}")
+        return schema_manager.parse_schema_string(schema)
     except Exception as e:
         logger.info(f"Failed to get database schema: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -102,7 +104,46 @@ async def process_query(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post('/api/execute-sql')
+async def execute_sql(request: QueryRequest):
+    """Execute custom SQL query"""
+    try:
+        with db_manager.get_cursor() as cursor:
+            cursor.execute(request.query)
 
+            query_type = request.query.strip().split()[0].upper()
+
+            if query_type in ("SELECT", "WITH"):
+                # Fetch actual rows
+                rows = cursor.fetchall()
+
+                if not rows:
+                    return {"success": True, "columns": [], "data": []}
+
+                # Get column names
+                columns = [desc[0] for desc in cursor.description]
+
+                # Map actual row values into dict
+                data = [dict(row) for row in rows]
+
+                return {"success": True, "columns": columns, "data": data}
+
+            else:
+                # For INSERT, UPDATE, DELETE
+                db_manager.commit()
+                rowcount = cursor.rowcount
+
+                # Handle RETURNING rows if supported
+                data = []
+                if cursor.description:
+                    rows = cursor.fetchall()
+                    columns = [desc[0] for desc in cursor.description]
+                    data = [dict(zip(columns, row)) for row in rows]
+
+                return {"success": True, "rows_affected": rowcount, "data": data}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":
