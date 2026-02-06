@@ -1,7 +1,5 @@
-import ast
 import re
-from typing import Dict, Any
-from typing import List
+from typing import Dict, Any, List
 
 from core.database import db_manager
 from logger import get_logger
@@ -91,26 +89,11 @@ class SchemaManager:
             return result if result else {}
 
 
-    def _get_table_columns(self, table_name: str, database_name: str) -> List[Dict]:
-        """Get detailed column information"""
+    def _get_table_columns(self, table_name: str, database_name: str) -> List[str]:
+        """Return column names in ordinal position order."""
         query = """
-        SELECT 
-            ORDINAL_POSITION as position,
-            COLUMN_NAME,
-            COLUMN_TYPE,
-            IS_NULLABLE,
-            COLUMN_DEFAULT,
-            COLUMN_KEY,
-            EXTRA,
-            COLUMN_COMMENT,
-            CHARACTER_SET_NAME,
-            COLLATION_NAME,
-            DATA_TYPE,
-            CHARACTER_MAXIMUM_LENGTH,
-            NUMERIC_PRECISION,
-            NUMERIC_SCALE,
-            DATETIME_PRECISION,
-            PRIVILEGES
+        SELECT
+            COLUMN_NAME
         FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
         ORDER BY ORDINAL_POSITION
@@ -118,7 +101,8 @@ class SchemaManager:
 
         with db_manager.get_cursor() as cursor:
             cursor.execute(query, (database_name, table_name))
-            return cursor.fetchall()
+            rows = cursor.fetchall()
+        return [row["COLUMN_NAME"] for row in rows]
 
 
     def _get_table_indexes(self, table_name: str, database_name: str) -> Dict[str, Dict]:
@@ -164,11 +148,8 @@ class SchemaManager:
 
         return indexes
 
-    def _get_foreign_keys(self, table_name: str, database_name: str) -> List[Dict]:
-        """
-        Return minimal foreign key metadata required for join inference.
-        """
-
+    def _get_foreign_keys(self, table_name: str, database_name: str) -> List[Dict[str, Any]]:
+        """Return foreign key metadata grouped by constraint (supports composite FKs)."""
         query = """
                 SELECT kcu.CONSTRAINT_NAME,
                        kcu.COLUMN_NAME,
@@ -186,24 +167,20 @@ class SchemaManager:
             cursor.execute(query, (database_name, table_name))
             rows = cursor.fetchall()
 
-        foreign_keys: Dict[str, Dict] = {}
-
+        fks: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             name = row["CONSTRAINT_NAME"]
-
-            if name not in foreign_keys:
-                foreign_keys[name] = {
+            if name not in fks:
+                fks[name] = {
+                    "name": name,
                     "referenced_table": row["REFERENCED_TABLE_NAME"],
-                    "columns": []
+                    "column_mapping": [],
                 }
+            fks[name]["column_mapping"].append(
+                {"local": row["COLUMN_NAME"], "referenced": row["REFERENCED_COLUMN_NAME"]}
+            )
 
-            foreign_keys[name]["columns"].append({
-                "local": row["COLUMN_NAME"],
-                "referenced": row["REFERENCED_COLUMN_NAME"]
-            })
-
-        return list(foreign_keys.values())
-
+        return list(fks.values())
 
     def _get_table_constraints(self, table_name: str, database_name: str) -> List[Dict]:
         """Get table constraints"""
@@ -254,61 +231,18 @@ class SchemaManager:
 
 
 
-    def _get_sample_data(self, table_name: str, database_name: str, limit: int = 3) -> List[Dict]:
-        """Get sample data from table"""
-        with db_manager.get_cursor() as cursor:
-            cursor.execute(f"SELECT * FROM `{database_name}`.`{table_name}` LIMIT %s", (limit,))
-            return cursor.fetchall()
-
-
-
-    def _get_table_columns(self, table_name: str, database_name: str) -> List[Dict]:
-        """Get detailed column information"""
-        query = """
-        SELECT 
-            COLUMN_NAME,
-            DATA_TYPE,
-            IS_NULLABLE,
-            COLUMN_KEY
-        FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-        ORDER BY ORDINAL_POSITION
-        """
-
-        with db_manager.get_cursor() as cursor:
-            cursor.execute(query, (database_name, table_name))
-            columns = cursor.fetchall()
-
-            return [
-                {
-                    "name": col["COLUMN_NAME"],
-                    "type": col["DATA_TYPE"],
-                    "nullable": col["IS_NULLABLE"] == "YES",
-                    "primary_key": col["COLUMN_KEY"] == "PRI"
-                }
-                for col in columns
-            ]
-
-
-    def get_schema(self, database_name: str = None):
-        """Get complete database schema information for relational DBs"""
-        schema_info = {"tables": {}}
+    def get_schema(self, database_name: str = None) -> Dict[str, Any]:
+        """Return lean schema for LLM context: create_statement, columns (names only), foreign_keys."""
+        schema_info: Dict[str, Any] = {"tables": {}}
 
         try:
-            cursor = db_manager.get_cursor()
-
             tables = self.get_table_list(database_name=database_name)
 
             for table in tables:
-                columns = self._get_table_columns(table, database_name)
-
-                cursor.execute(f"SELECT * FROM `{table}` LIMIT 3")
-                rows = cursor.fetchall()
-
                 schema_info["tables"][table] = {
                     "create_statement": self._get_create_statement(table, database_name),
-                    "columns": columns,
-                    "sample_data": [dict(row) for row in rows]
+                    "columns": self._get_table_columns(table, database_name),
+                    "foreign_keys": self._get_foreign_keys(table, database_name),
                 }
 
             return schema_info
@@ -317,8 +251,8 @@ class SchemaManager:
             logger.info(f"Error getting schema: {e}")
             raise
 
-    def get_schema_string(self, database_name: str = None):
-        """Convert schema to string format for LLM context"""
+    def get_schema_string(self, database_name: str = None) -> str:
+        """Convert schema to a compact string format for debugging."""
         schema_info = self.get_schema(database_name)
         schema_string = "Database Schema:\n\n"
 
@@ -326,90 +260,55 @@ class SchemaManager:
             schema_string += f"Table: {table_name}\n"
             schema_string += f"Create Statement: {table_info['create_statement']}\n"
             schema_string += "Columns:\n"
+            for col_name in table_info.get("columns", []):
+                schema_string += f"  - {col_name}\n"
 
-            for col in table_info["columns"]:
-                pk_flag = " PRIMARY KEY" if col["primary_key"] else ""
-                null_flag = " NOT NULL" if not col["nullable"] else ""
-                schema_string += f"  - {col['name']} ({col['type']}{pk_flag}{null_flag})\n"
-
-            if table_info["sample_data"]:
-                schema_string += "Sample Data:\n"
-                for sample in table_info["sample_data"][:2]:  # Show only 2 samples
-                    schema_string += f"  {sample}\n"
+            fks = table_info.get("foreign_keys") or []
+            if fks:
+                schema_string += "Foreign Keys:\n"
+                for fk in fks:
+                    ref_table = fk.get("referenced_table", "")
+                    mapping = fk.get("column_mapping", [])
+                    pairs = ", ".join([f"{m.get('local')}->{ref_table}.{m.get('referenced')}" for m in mapping])
+                    schema_string += f"  - {pairs}\n"
 
             schema_string += "\n"
 
         return schema_string
 
-    async def get_schema_info(self, database_name: str = None) -> Dict[str, Any]:
-        """Get schema information as a structured dictionary"""
-        schema_info = self.get_schema(database_name)
-        schema_string = ""
-        for table_name, table_info in schema_info["tables"].items():
-            schema_string += f"Table: {table_name}\n"
-            schema_string += "Columns:\n"
-
-            for col in table_info["columns"]:
-                pk_flag = " PRIMARY KEY" if col["primary_key"] else ""
-                null_flag = " NOT NULL" if not col["nullable"] else ""
-                schema_string += f"  - {col['name']} ({col['type']}{pk_flag}{null_flag})\n"
-
-        return schema_string
-
-
     def parse_schema_string(self, schema_string: str) -> Dict[str, Any]:
+        """Parse the debug schema string back into the lean dict shape."""
         schema: Dict[str, Any] = {"tables": {}}
+        current_table: Dict[str, Any] = {}
 
-        current_table = None
+        for raw in schema_string.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
 
-        lines = schema_string.splitlines()
-
-        for line in lines:
-            line = line.strip()
-
-            # Table name
             if line.startswith("Table:"):
                 table_name = line.replace("Table:", "").strip()
                 current_table = {
                     "create_statement": "",
-                    "columns": {},
-                    "sample_data": []
+                    "columns": [],
+                    "foreign_keys": [],
                 }
                 schema["tables"][table_name] = current_table
+                continue
 
-            # CREATE TABLE
-            elif line.startswith("Create Statement:") and current_table is not None:
-                current_table["create_statement"] = line.replace(
-                    "Create Statement:", ""
-                ).strip()
+            if not current_table:
+                continue
 
-            # Column definition
-            elif line.startswith("-") and current_table is not None:
-                # Example:
-                # - department_id (bigint PRIMARY KEY NOT NULL)
-                match = re.match(r"-\s+(\w+)\s+\((.+)\)", line)
-                if not match:
-                    continue
+            if line.startswith("Create Statement:"):
+                current_table["create_statement"] = line.replace("Create Statement:", "").strip()
+                continue
 
-                col_name, col_meta = match.groups()
-
-                col_meta = col_meta.upper()
-
-                current_table["columns"][col_name] = {
-                    "type": col_meta.split()[0].lower(),
-                    "primary_key": "PRIMARY KEY" in col_meta,
-                    "nullable": "NOT NULL" not in col_meta
-                }
-
-            # Sample data
-            elif line.startswith("{") and current_table is not None:
-                try:
-                    # safe literal eval
-                    current_table["sample_data"].append(ast.literal_eval(line))
-                except Exception:
-                    pass
-
-        logger.info(f"Schema: {schema}")
+            if line.startswith("-"):
+                # Column line inside "Columns:" block
+                m = re.match(r"-\s+(\w+)$", line)
+                if m:
+                    current_table["columns"].append(m.group(1))
+                continue
 
         return schema
 

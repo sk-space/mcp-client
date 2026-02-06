@@ -1,0 +1,65 @@
+1. List all customers and their email addresses, ordered by signup date.
+2. Which customers were created in January 2025?
+3. Show each customer’s default shipping address (city, state_region, country).
+4. Which customers have more than one saved address?
+5. List all vendors and how many active products each vendor has.
+6. Which vendor has the most products?
+7. Show all products for a given vendor (by vendor slug) with price and currency.
+8. Find products that are inactive.
+9. What are the top 5 most expensive products?
+10. List products in the “Cookware” category.
+11. Show all products in the “Electronics” category and its subcategories.
+12. Which products have no images?
+13. For each product, show the primary image URL (lowest sort_order).
+14. List all categories and their parent category name (if any).
+15. Which categories have no products mapped to them?
+16. Show all carts that are currently ACTIVE with the customer name.
+17. What items are in customer X’s ACTIVE cart (product name, quantity, unit_price)?
+18. Which cart has the highest total item quantity?
+19. Find abandoned carts created after a specific date.
+20. List all orders for a customer email, newest first.
+21. What is the total revenue from PAID or DELIVERED orders?
+22. Show orders that are PENDING along with their total_amount.
+23. What is the average order total by status?
+24. Which orders have zero tax_amount?
+25. For a given order_number, list line items with sku, product_name, quantity, and unit_price.
+26. Which products are most frequently purchased (by total quantity in order_items)?
+27. Show the top 3 customers by lifetime spend (sum of total_amount) for PAID/DELIVERED orders.
+28. Compare orders.subtotal vs computed sum of order_items (quantity * unit_price) for each order.
+29. List payments for an order, including provider, status, amount, and created_at.
+30. Which orders have multiple payment attempts?
+31. Find failed payments in a given date range.
+32. List orders that have CAPTURED payments but are still PENDING in orders.
+33. Show shipments that are SHIPPED but not DELIVERED yet, with carrier and tracking_number.
+34. For each order, show its latest shipment status and shipped_at.
+35. Which delivered shipments took more than 2 days from shipped_at to delivered_at?
+36. List shipment items for a shipment, including the associated order item sku and quantity.
+37. Find orders that have no shipments yet.
+38. Which orders were split into multiple shipments (more than 1 shipment record)?
+39. For each country, how many customer addresses exist?
+40. For each city, summarize total orders and total revenue shipped to that city.
+41. For each vendor, show total products, active products, and inactive products.
+42. For each vendor, show total units sold and total revenue (sum order_items.quantity * order_items.unit_price) from PAID/DELIVERED orders.
+43. Find customers who have an ACTIVE cart and also placed at least one PAID/DELIVERED order.
+44. For each product, show total units sold and total revenue, and include the vendor name.
+45. For each customer, show their most recent order (order_number, status, total_amount, created_at).
+46. List orders where total_amount is not equal to (subtotal + shipping_fee + tax_amount) and compute the difference.
+47. List orders where the computed items total (sum quantity * unit_price) differs from orders.subtotal by more than 1.00.
+48. Reconcile payments vs orders: list orders where sum of CAPTURED payments is less than total_amount (underpaid).
+49. Reconcile payments vs orders: list orders where sum of CAPTURED payments is greater than total_amount (overpaid).
+50. List customer emails that have more than 1 cart with status ACTIVE.
+51. For each customer, show counts of carts by status (ACTIVE, ORDERED, ABANDONED).
+52. For each order, show number of shipments and total quantity shipped (sum shipment_items.quantity).
+53. Find shipments where shipped_at is set but status is still PENDING or PACKED.
+54. For each carrier, show number of shipments and how many are DELIVERED.
+55. List customers who have never placed an order but have created at least one cart.
+56. Find orders that include products that are currently inactive (products.is_active = 0) based on order_items.product_id.
+57. Find products that have been sold at least once but have no images.
+58. Find products that have images but have never been sold.
+59. For each vendor, list the top 3 products by revenue.
+60. List customers whose default address is missing postal_code or state_region.
+61. For each payment provider, show counts of payments by status and total CAPTURED amount.
+62. List orders that have at least one FAILED payment attempt and at least one CAPTURED payment.
+63. List orders that have a shipment but no shipment items.
+64. Find categories that contain products from more than one vendor.
+65. Find order_items with product_id IS NULL and list their sku/product_name and the related order_number.

@@ -83,9 +83,10 @@ async def get_tools():
 async def get_schema():
     """Get the database schema"""
     try:
-        schema = await schema_manager.get_schema_info(config.DB_NAME)
+        schema_string = schema_manager.get_schema_string(config.DB_NAME)
+        schema = schema_manager.parse_schema_string(schema_string)
         logger.info(f"Retrieved schema: {schema}")
-        return schema_manager.parse_schema_string(schema)
+        return schema
     except Exception as e:
         logger.info(f"Failed to get database schema: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -95,8 +96,7 @@ async def get_schema():
 async def process_query(request: QueryRequest):
     """Process a query and return the response"""
     try:
-        schema_string = schema_manager.get_schema_string(config.DB_NAME)
-        schema = schema_manager.parse_schema_string(schema_string)
+        schema = schema_manager.get_schema(config.DB_NAME)
         response = await app.state.client.process_query(request.query, schema)
         return json.loads(response)
     except Exception as e:

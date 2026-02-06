@@ -57,41 +57,90 @@ def results_to_df(result_json: dict) -> pd.DataFrame:
 def schema_tables_to_rows(schema_json: dict) -> dict[str, pd.DataFrame]:
     """Convert schema JSON into per-table DataFrames.
 
-    Expected shape (from /api/schema):
-        {"tables": {"table": {"columns": {"col": {"type": str, "primary_key": bool, "nullable": bool}}}}}
+    Supported shapes (from /api/schema):
+      - New lean schema:
+          {"tables": {"table": {"columns": ["col1", ...], "foreign_keys": [...]}}}
+      - Legacy schema (older versions):
+          {"tables": {"table": {"columns": {"col": {"type": str, "primary_key": bool, "nullable": bool}}}}}
+
+    This function normalizes both into a DataFrame with at least a `column` field.
     """
     tables = schema_json.get("tables") if isinstance(schema_json, dict) else None
     if not isinstance(tables, dict):
         return {}
 
     out: dict[str, pd.DataFrame] = {}
+
     for table_name, table_info in tables.items():
         if not isinstance(table_info, dict):
             continue
 
         cols = table_info.get("columns")
-        if not isinstance(cols, dict):
-            cols = {}
 
-        rows = []
-        for col_name, meta in cols.items():
-            meta = meta if isinstance(meta, dict) else {}
-            rows.append(
-                {
-                    "column": col_name,
-                    "type": meta.get("type", ""),
-                    "pk": bool(meta.get("primary_key", False)),
-                    "nullable": bool(meta.get("nullable", True)),
-                }
-            )
+        rows: list[dict] = []
+        # New format: list[str]
+        if isinstance(cols, list):
+            for col_name in cols:
+                rows.append({"column": str(col_name)})
+
+        # Legacy format: dict[str, meta]
+        elif isinstance(cols, dict):
+            for col_name, meta in cols.items():
+                meta = meta if isinstance(meta, dict) else {}
+                rows.append(
+                    {
+                        "column": col_name,
+                        "type": meta.get("type", ""),
+                        "pk": bool(meta.get("primary_key", False)),
+                        "nullable": bool(meta.get("nullable", True)),
+                    }
+                )
 
         df = pd.DataFrame(rows)
+
+        # Stable sort if legacy fields exist; otherwise alpha by column name.
         if not df.empty:
-            df = df.sort_values(by=["pk", "column"], ascending=[False, True], kind="mergesort")
+            if "pk" in df.columns:
+                df = df.sort_values(by=["pk", "column"], ascending=[False, True], kind="mergesort")
+            else:
+                df = df.sort_values(by=["column"], ascending=[True], kind="mergesort")
 
         out[str(table_name)] = df
 
     return out
+
+
+def foreign_keys_to_df(table_info: dict) -> pd.DataFrame:
+    """Normalize table foreign keys into a DataFrame for display."""
+    fks = table_info.get("foreign_keys") if isinstance(table_info, dict) else None
+    if not isinstance(fks, list) or not fks:
+        return pd.DataFrame(columns=["fk", "local", "ref_table", "ref_col"])
+
+    rows: list[dict] = []
+    for fk in fks:
+        fk = fk if isinstance(fk, dict) else {}
+        fk_name = fk.get("name", "")
+        ref_table = fk.get("referenced_table", "")
+        mapping = fk.get("column_mapping")
+        if not isinstance(mapping, list) or not mapping:
+            rows.append({"fk": fk_name, "local": "", "ref_table": ref_table, "ref_col": ""})
+            continue
+
+        for m in mapping:
+            m = m if isinstance(m, dict) else {}
+            rows.append(
+                {
+                    "fk": fk_name,
+                    "local": m.get("local", ""),
+                    "ref_table": ref_table,
+                    "ref_col": m.get("referenced", ""),
+                }
+            )
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(by=["ref_table", "fk", "local"], ascending=[True, True, True], kind="mergesort")
+    return df
 
 
 # ---------- Layout ----------
@@ -137,7 +186,7 @@ with left:
                 per_table = schema_tables_to_rows(schema_json)
 
                 for t in table_names:
-                    df_cols = per_table.get(str(t), pd.DataFrame(columns=["column", "type", "pk", "nullable"]))
+                    df_cols = per_table.get(str(t), pd.DataFrame(columns=["column"]))
                     col_count = int(len(df_cols)) if isinstance(df_cols, pd.DataFrame) else 0
 
                     with st.expander(f"{t} ({col_count} columns)", expanded=False):
@@ -150,6 +199,18 @@ with left:
                             )
                         else:
                             st.caption("No column details available.")
+
+                        # Foreign keys (new schema shape)
+                        table_info = tables_map.get(t, {}) if isinstance(tables_map, dict) else {}
+                        fk_df = foreign_keys_to_df(table_info if isinstance(table_info, dict) else {})
+                        if fk_df is not None and not fk_df.empty:
+                            st.caption("Foreign keys")
+                            st.dataframe(
+                                fk_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                height=min(240, 34 * (len(fk_df) + 1)),
+                            )
 
 
 # ---------- Query + results (right) ----------
