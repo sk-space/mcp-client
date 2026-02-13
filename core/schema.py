@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from core.database import db_manager
 from logger import get_logger
@@ -42,22 +42,28 @@ class SchemaManager:
 
 
     def get_table_list(self, database_name: str = None) -> List[str]:
+        """Backwards-compatible: return names of tables and views."""
+        return [obj["name"] for obj in self.get_table_objects(database_name=database_name)]
+
+    def get_table_objects(self, database_name: str) -> List[Dict[str, str]]:
+        """Return database objects (tables/views) with their type.
+
+        Shape: [{"name": "...", "type": "BASE TABLE"|"VIEW"}, ...]
+        """
         try:
             with db_manager.get_cursor() as cursor:
-                if database_name:
-                    cursor.execute(f"SHOW TABLES FROM `{database_name}`")
-                else:
-                    cursor.execute("SHOW TABLES")
+                query = """
+                SELECT TABLE_NAME, TABLE_TYPE
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = %s
+                ORDER BY TABLE_NAME
+                """
+                cursor.execute(query, (database_name,))
+                results = cursor.fetchall() or []
 
-                results = cursor.fetchall()
-
-                # Results format depends on how we connect
-                key = f"Tables_in_{database_name}" if database_name else list(results[0].keys())[0]
-                return [row[key] for row in results]
-
+            return [{"name": row["TABLE_NAME"], "type": row["TABLE_TYPE"]} for row in results]
         except Exception as e:
-            raise Exception(f"Failed to get table list: {e}")
-
+            raise Exception(f"Failed to get table objects: {e}")
 
     def _get_table_basic_info(self, table_name: str, database_name: str) -> Dict:
         """Get basic table information"""
@@ -217,32 +223,115 @@ class SchemaManager:
             return cursor.fetchall()
 
     def _get_create_statement(self, table_name: str, database_name: str) -> str:
-        """Get CREATE TABLE statement as a single line"""
-        with db_manager.get_cursor() as cursor:
-            cursor.execute(f"SHOW CREATE TABLE `{database_name}`.`{table_name}`")
-            result = cursor.fetchone()
+        """Get CREATE statement as a single line (handles tables + views)."""
+        # Determine type (BASE TABLE / VIEW). If we can't detect, we fallback to table.
+        obj_type = self._get_object_type(table_name, database_name)
+        return self._get_create_statement_for_object(table_name, database_name, obj_type=obj_type)
 
-        create_sql = result['Create Table'] if result else ""
+    def _get_object_type(self, object_name: str, database_name: str) -> Optional[str]:
+        query = """
+        SELECT TABLE_TYPE
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+        """
+        try:
+            with db_manager.get_cursor() as cursor:
+                cursor.execute(query, (database_name, object_name))
+                row = cursor.fetchone()
+            return row.get("TABLE_TYPE") if row else None
+        except Exception:
+            return None
+
+    def _get_create_statement_for_object(self, object_name: str, database_name: str, obj_type: Optional[str]) -> str:
+        """Fetch SHOW CREATE output for a table or a view.
+
+        Falls back to information_schema.VIEWS.VIEW_DEFINITION if SHOW CREATE VIEW fails.
+        """
+        obj_type_norm = (obj_type or "").upper()
+        is_view = obj_type_norm == "VIEW"
+
+        with db_manager.get_cursor() as cursor:
+            try:
+                if is_view:
+                    cursor.execute(f"SHOW CREATE VIEW `{database_name}`.`{object_name}`")
+                    result = cursor.fetchone() or {}
+                    # MySQL typically returns 'Create View'. Some variants return different casing.
+                    create_sql = (
+                        result.get("Create View")
+                        or result.get("Create view")
+                        or result.get("CREATE VIEW")
+                        or ""
+                    )
+                else:
+                    cursor.execute(f"SHOW CREATE TABLE `{database_name}`.`{object_name}`")
+                    result = cursor.fetchone() or {}
+                    create_sql = (
+                        result.get("Create Table")
+                        or result.get("Create table")
+                        or result.get("CREATE TABLE")
+                        or ""
+                    )
+            except Exception as e:
+                # Common for views: insufficient privileges/definer issues.
+                if is_view:
+                    logger.info(f"SHOW CREATE VIEW failed for {database_name}.{object_name}: {e}")
+                    create_sql = self._get_view_definition_fallback(object_name, database_name) or ""
+                else:
+                    raise
 
         # Remove newlines and extra spaces
-        create_sql_single_line = " ".join(create_sql.replace("\n", " ").replace("\r", " ").split())
+        return " ".join(str(create_sql).replace("\n", " ").replace("\r", " ").split())
 
-        return create_sql_single_line
+    def _get_view_definition_fallback(self, view_name: str, database_name: str) -> str:
+        """Fallback for views when SHOW CREATE VIEW fails.
 
-
+        NOTE: VIEW_DEFINITION may be truncated depending on server settings.
+        """
+        query = """
+        SELECT VIEW_DEFINITION
+        FROM information_schema.VIEWS
+        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+        """
+        try:
+            with db_manager.get_cursor() as cursor:
+                cursor.execute(query, (database_name, view_name))
+                row = cursor.fetchone() or {}
+            view_def = row.get("VIEW_DEFINITION") or ""
+            if not view_def:
+                return ""
+            return f"CREATE VIEW `{view_name}` AS {view_def}"
+        except Exception:
+            return ""
 
     def get_schema(self, database_name: str = None) -> Dict[str, Any]:
-        """Return lean schema for LLM context: create_statement, columns (names only), foreign_keys."""
+        """Return lean schema for LLM context.
+
+        Includes both base tables and views. Each object entry includes:
+        - object_type: 'BASE TABLE' | 'VIEW'
+        - create_statement: single-line DDL (best-effort)
+        - columns: names only
+        - foreign_keys: empty for views
+        - keys: index metadata grouped by index name (empty for views)
+        """
         schema_info: Dict[str, Any] = {"tables": {}}
 
         try:
-            tables = self.get_table_list(database_name=database_name)
+            if not database_name:
+                raise ValueError("database_name is required to extract schema")
 
-            for table in tables:
-                schema_info["tables"][table] = {
-                    "create_statement": self._get_create_statement(table, database_name),
-                    "columns": self._get_table_columns(table, database_name),
-                    "foreign_keys": self._get_foreign_keys(table, database_name),
+            objects = self.get_table_objects(database_name=database_name)
+
+            for obj in objects:
+                name = obj["name"]
+                obj_type = obj.get("type")
+                is_view = (obj_type or "").upper() == "VIEW"
+
+                schema_info["tables"][name] = {
+                    "object_type": obj_type,
+                    "create_statement": self._get_create_statement_for_object(name, database_name, obj_type=obj_type),
+                    "columns": self._get_table_columns(name, database_name),
+                    "foreign_keys": [] if is_view else self._get_foreign_keys(name, database_name),
+                    "keys": {} if is_view else self._get_table_indexes(name, database_name),
                 }
 
             return schema_info
